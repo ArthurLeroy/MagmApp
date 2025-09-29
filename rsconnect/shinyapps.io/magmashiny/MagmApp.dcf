@@ -1,0 +1,12 @@
+name: MagmApp
+title: MagmApp
+username: magmashiny
+account: magmashiny
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 15594020
+bundleId: 10967165
+url: https://magmashiny.shinyapps.io/MagmApp/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE

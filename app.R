@@ -1,4 +1,3 @@
-# app.R — 2 onglets (Collecte, Prédiction), pas de persistance
 library(shiny)
 library(MagmaClustR)
 library(dplyr)
