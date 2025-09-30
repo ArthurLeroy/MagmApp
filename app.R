@@ -10,7 +10,7 @@ library(ggplot2)
 # =========================
 
 # Fichiers possibles (on cherche en priorité dans data/model/, puis à la racine)
-df_candidates     <- c("data/model/df_train.csv", "df_train.csv")
+df_candidates     <- c("data/dataset/df_train.csv", "df_train.csv")
 model_candidates  <- c("data/model/model_se.rds", "model_se.rds")
 
 df_path    <- df_candidates[file.exists(df_candidates)][1]
