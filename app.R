@@ -25,7 +25,7 @@ df_init <- tryCatch(
 
 model_init <- tryCatch(
   if (!is.na(model_path)) readRDS(model_path) else NULL,
-  error = function(e) NULL
+  error = function(e) NULL 
 )
 
 # =========================
@@ -51,11 +51,42 @@ ui <- navbarPage(
       ),
       column(
         width = 8,
-        plotOutput("dataplot", click = "dataplot_click", width = "100%")
+        plotOutput("datacollect", click = "datacollect_click", width = "100%")
       )
     )
   ),
-
+  # --- Training ---
+  tabPanel("Entrainement du modèle",
+           fluidRow(
+             column(
+               width = 4,
+               selectInput("choose_name2", "Visualisation prédictions naïves :",
+                           choices = unique(df_init$ID),
+                           selected = if (length(unique(df_init$ID)) > 0) unique(df_init$ID)[-1] else NULL),
+               br(),
+               actionButton("train", "Entrainer le modèle"),
+               br(),
+               h4("Avancement de l'algorithme :"),
+               verbatimTextOutput("log_output", placeholder = TRUE)
+             ),
+             column(
+               width = 8,
+               plotOutput("dataplot", width = "100%")
+             )
+           )
+  ),
+  # --- Clustering ---
+  tabPanel("Clustering",
+           fluidRow(
+             column(width = 4,
+              tableOutput("clust")
+              ),
+             column(
+               width = 8,
+               plotOutput("clust_plot", width = "100%")
+             )
+           )
+  ),
   # --- Prédiction ---
   tabPanel("Prédiction",
     fluidRow(
@@ -90,7 +121,7 @@ server <- function(input, output, session) {
 
   # ---- Grilles / HP réactifs ----
   grid_inputs_collect <- seq(0, 200, 0.5)  # Collecte : échelle démo
-  ylim_collect        <- c(0, 500)
+  ylim_collect        <- c(0, 550)
   hp_collect          <- tibble(se_variance = 7, se_lengthscale = 5)
 
   grid_inputs_pred <- reactive({
@@ -125,11 +156,14 @@ server <- function(input, output, session) {
     }
   })
 
-  df_click <- reactiveVal(NULL)  # points de collecte (échelle 0..200 / 0..500)
+  df_click <- reactiveVal(NULL)  # points de collecte (échelle 0..200 / 0..550)
+  df_pred_name  <- reactiveVal(NULL)  # données de l’ID choisi
+  df_click_pred <- reactiveVal(NULL)  # points ajoutés à droite (s’ajoutent aux données)
 
-  observeEvent(input$dataplot_click, {
+  
+  observeEvent(input$datacollect_click, {
     nm <- name_id(); if (is.null(nm) || !nzchar(nm)) return(NULL)
-    cx <- input$dataplot_click$x; cy <- input$dataplot_click$y
+    cx <- input$datacollect_click$x; cy <- input$datacollect_click$y
     if (is.na(cx) || is.na(cy)) return(NULL)
     newrow <- data.frame(ID = nm, Input = round(cx, 1), Output = round(cy, 2))
     old <- df_click()
@@ -153,25 +187,51 @@ server <- function(input, output, session) {
       error = function(e) NULL
     )
   })
-
-  output$dataplot <- renderPlot({
-    pr <- prior()
+  
+  prior_data <- reactive({
+    tryCatch(
+      pred_gp(
+        data         = df_pred_name(),
+        kern         = "SE",
+        mean         = 200,
+        grid_inputs  = grid_inputs_collect,
+        hp           = hp_collect,
+        get_full_cov = TRUE,
+        plot         = FALSE
+      ),
+      error = function(e) NULL
+    )
+  })
+  
+  output$datacollect <- renderPlot({
     d  <- df_click()
-
-    if (is.null(d) || nrow(d) == 0 || is.null(pr)) {
+    
+    if (is.null(d) || nrow(d) == 0) {
       ggplot() +
         theme_minimal() +
         labs(title = "Cliquez pour ajouter des points",
              x = "Nourriture ingérée (g)", y = "Lait produit (mL)") +
         scale_x_continuous(breaks = seq(0, 200, 25), limits = c(0, 200)) +
-        scale_y_continuous(breaks = seq(0, 500, 25), limits = ylim_collect)
+        scale_y_continuous(breaks = seq(0, 550, 25), limits = ylim_collect)
     } else {
-      plot_gp(pred_gp = pr, data = d, samples = TRUE) +
+      ggplot(d) + geom_point(aes(x = Input, y = Output)) +
+        theme_minimal() +
+        labs(title = "Cliquez pour ajouter des points",
+             x = "Nourriture ingérée (g)", y = "Lait produit (mL)") +
+        scale_x_continuous(breaks = seq(0, 200, 25), limits = c(0, 200)) +
+        scale_y_continuous(breaks = seq(0, 550, 25), limits = ylim_collect)
+    }
+  })
+
+  output$dataplot <- renderPlot({
+    pr_data <- prior_data()
+    d  <- df_click()
+
+      plot_gp(pred_gp = pr_data, data = df_pred_name(), samples = TRUE) +
         theme_minimal() + 
         xlab("Nourriture ingérée (g)") + ylab("Lait produit (mL)") +
         scale_x_continuous(breaks = seq(0, 200, 25), limits = c(0, 200)) +
-        scale_y_continuous(breaks = seq(0, 500, 25), limits = ylim_collect)
-    }
+        scale_y_continuous(breaks = seq(0, 550, 25), limits = ylim_collect)
   })
 
   # Sauvegarder : ajoute simplement (en mémoire) à df_train() — aucune bascule d’onglet, aucune modif de sélection
@@ -191,6 +251,12 @@ server <- function(input, output, session) {
     keep_sel <- if (!is.null(current_sel) && current_sel %in% ids) current_sel else if (length(ids) > 0) ids[1] else NULL
     updateSelectInput(session, "choose_name", choices = ids, selected = keep_sel)
 
+    # Maintenir la sélection actuelle dans le menu si possible
+    current_sel2 <- isolate(input$choose_name2)
+    ids <- unique(df_new$ID)
+    keep_sel2 <- if (!is.null(current_sel2) && current_sel2 %in% ids) current_sel2 else if (length(ids) > 0) ids[1] else NULL
+    updateSelectInput(session, "choose_name2", choices = ids, selected = keep_sel2)
+
     # reset collecte
     df_click(NULL)
 
@@ -208,12 +274,30 @@ server <- function(input, output, session) {
     sel <- if (!is.null(old) && old %in% ids) old else if (length(ids) > 0) ids[1] else NULL
     updateSelectInput(session, "choose_name", choices = ids, selected = sel)
   })
-
-  df_pred_name  <- reactiveVal(NULL)  # données de l’ID choisi
-  df_click_pred <- reactiveVal(NULL)  # points ajoutés à droite (s’ajoutent aux données)
+  
+  observe({
+    ids <- unique(df_train()$ID)
+    old <- isolate(input$choose_name2)
+    sel <- if (!is.null(old) && old %in% ids) old else if (length(ids) > 0) ids[1] else NULL
+    updateSelectInput(session, "choose_name2", choices = ids, selected = sel)
+  })
 
   observeEvent(input$choose_name, {
     nm <- input$choose_name
+    if (!is.null(nm) && nzchar(nm) && nrow(df_train()) > 0) {
+      df_pred_name(
+        df_train() %>%
+          filter(ID == nm) %>%
+          select(any_of(c("ID","Input","Output")))   # ignore Cluster/Proba si présents
+      )
+    } else {
+      df_pred_name(NULL)
+    }
+    df_click_pred(NULL)
+  }, ignoreInit = FALSE)
+
+    observeEvent(input$choose_name2, {
+    nm <- input$choose_name2
     if (!is.null(nm) && nzchar(nm) && nrow(df_train()) > 0) {
       df_pred_name(
         df_train() %>%
@@ -243,6 +327,39 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$reset2, { df_click_pred(NULL) })
+
+  ## Initialise le text de log du training
+  log_text <- reactiveVal("")
+  
+  observeEvent(input$train, {
+    m = model_se()
+    log_text("")  # Réinitialise les logs
+
+    data = df_train() %>% dplyr::select(-Cluster)
+
+    ini_hp_i = tibble::tibble(ID = unique(data$ID),  m$hp_i %>% select(-ID) %>% slice(1))
+    
+    ini_hp_k = m$hp_k %>% dplyr::select(-prop_mixture)
+
+    # Capture les sorties texte ET exécute l'algo
+    captured_logs <- capture.output({
+      model_se(train_magmaclust(data = data, 
+                                nb_cluster = 3, 
+                                ini_hp_i = ini_hp_i, 
+                                ini_hp_k = ini_hp_k,
+                                prior_mean = 200, 
+                                cv_threshold = 0.001))
+    })
+
+    
+    # Met à jour les logs
+    log_text(paste(captured_logs, collapse = "\n"))
+    
+  })
+
+  output$log_output <- renderText({
+    log_text()
+  })
 
   df_pred <- reactive({
     # 🔑 combine toujours l’ID sélectionné + points ajoutés par clic
@@ -313,6 +430,33 @@ server <- function(input, output, session) {
       error = function(e) NULL
     )
   })
+  
+  output$clust_plot <- renderPlot({
+    m  <- model_se()
+    
+    data_clust = data_allocate_cluster(m)
+    
+    clust_db = m$hyperpost$pred$K1 %>% mutate(Clust = "K1") %>% 
+      bind_rows(m$hyperpost$pred$K2 %>% mutate(Clust = "K2")) %>% 
+      bind_rows(m$hyperpost$pred$K3 %>% mutate(Clust = "K3"))
+
+  ggplot() + 
+    geom_point(data = data_clust, aes(x = Input, y = Output, col = Cluster), 
+                              size = 1) +
+               geom_line(data = clust_db, aes(x = Input, y = Mean, col = Clust), 
+                             linetype = "dashed") +
+               theme_classic() +
+               xlab("Nourriture ingérée (g)") + ylab("Lait produit (mL)") +
+               scale_color_manual(name = "Couleur vache", 
+                                  labels = c(
+                                     "K1" = "Violette",
+                                     "K2" = "Bleue",
+                                     "K3" = "Jaune"),
+                                  values = c(
+                                     "#ff00eeff",
+                                     "#00f1fdff", 
+                                     "#cdc300ff"))
+  })
 
   output$info <- renderTable({
     pr  <- pred()
@@ -322,6 +466,19 @@ server <- function(input, output, session) {
         if (!is.null(pr)) round(pr$mixture$K1 * 100, 2) else NA,
         if (!is.null(pr)) round(pr$mixture$K2 * 100, 2) else NA,
         if (!is.null(pr)) round(pr$mixture$K3 * 100, 2) else NA
+      )
+    ) 
+  })
+  
+  output$clust <- renderTable({
+    m  <- model_se()
+    
+    tibble::tibble(
+      "Couleur vache" = c('Violette', 'Bleue', 'Jaune'),
+      "Proportion de vaches (%)" = c(
+        if (!is.null(m)) round(m$hp_k$prop_mixture["K1"] * 100, 2) else NA,
+        if (!is.null(m)) round(m$hp_k$prop_mixture["K2"] * 100, 2) else NA,
+        if (!is.null(m)) round(m$hp_k$prop_mixture["K3"] * 100, 2) else NA
       )
     ) 
   })
